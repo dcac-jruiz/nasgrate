@@ -107,7 +107,19 @@ abstract class Base
                 foreach ($item['sql'] as $sqlQuery) {
                     try {
                         $this->_write("\n\033[33m" . $sqlQuery . "\033[0m\n");
-                        $this->_getDb()->exec($sqlQuery);
+                        
+                        // Detectar stored procedures y funciones para manejo especial
+                        if (preg_match('/CREATE\s+(PROCEDURE|FUNCTION)/i', $sqlQuery)) {
+                            // Para stored procedures, usar prepare+execute que maneja mejor el contenido multi-línea
+                            $stmt = $this->_getDb()->prepare($sqlQuery);
+                            $stmt->execute();
+                            // Cerrar el cursor para evitar problemas con resultsets pendientes
+                            $stmt->closeCursor();
+                            $stmt = null;
+                        } else {
+                            // Para queries normales, usar exec como antes
+                            $this->_getDb()->exec($sqlQuery);
+                        }
                     } catch (\PDOException $e) {
                         $this->_writeError($sqlQuery . "\n\nDATABASE ERROR :: " . $e->getMessage());
                     } catch (\Exception $e) {

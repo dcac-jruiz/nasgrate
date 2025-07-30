@@ -32,41 +32,83 @@ class Migration
         $currentSection = null;
         $path = DIR_MIGRATION . '/' . $this->_migrationId . '.' . FILE_EXTENSION;
         if (!file_exists($path)) throw new Exception('File ' . $path . ' not found');
-        foreach (file($path) as $str) {
+        
+        $fileContent = file_get_contents($path);
+        $lines = explode("\n", $fileContent);
+        
+        $subQuery = array();
+        
+        foreach ($lines as $str) {
+            // Procesar headers del archivo
             if (preg_match('/ *-- *Skip *:/', $str)) {
-                list($param, $value)
-                    = explode(':', $str, 2);
+                list($param, $value) = explode(':', $str, 2);
                 $this->setIsSkip(trim($value) == 'yes');
                 $currentSection = null;
+                continue;
             }
+            
             foreach (array('Name', 'Description', 'Date') as $field) {
                 if (preg_match('/ *-- *' . $field . ' *:/', $str)) {
                     list($param, $value) = explode(':', $str, 2);
                     call_user_func_array(array($this, 'set' . trim($field)), array(trim($value)));
                     $currentSection = null;
+                    continue 2;
                 }
             }
 
-            if ($currentSection && trim($str)) {
-                $subQuery[] = str_replace("\n", "", $str);
-            }
-
-            if ($currentSection && !trim($str)) {
-                if ($subQuery && in_array(strtolower($currentSection), array('up', 'down'))) {
-                    call_user_func_array(array($this, 'add' . ucfirst(strtolower($currentSection)) . 'Sql'), array(implode("\n", $subQuery)));
-                }
-                $subQuery = array();
-            }
-
+            // Detectar secciones UP/DOWN
             if (preg_match('/ *-- *(UP|DOWN) *--/', $str, $s)) {
+                // Guardar query anterior si existe
+                if ($currentSection && $subQuery) {
+                    $this->_processSubQuery($subQuery, $currentSection);
+                }
                 $currentSection = $s[1];
                 $subQuery = array();
+                continue;
             }
 
+            // Acumular contenido de la sección actual
+            if ($currentSection) {
+                $subQuery[] = $str;
+            }
         }
-        if ($currentSection && $subQuery)
-            call_user_func_array(array($this, 'add' . ucfirst(strtolower($currentSection)) . 'Sql'), array(implode("\n", $subQuery)));
+        
+        // Procesar último subQuery
+        if ($currentSection && $subQuery) {
+            $this->_processSubQuery($subQuery, $currentSection);
+        }
+        
         return $this;
+    }
+    
+    private function _processSubQuery($subQuery, $section)
+    {
+        // Eliminar líneas vacías al inicio y final
+        while (count($subQuery) > 0 && trim($subQuery[0]) === '') {
+            array_shift($subQuery);
+        }
+        while (count($subQuery) > 0 && trim($subQuery[count($subQuery)-1]) === '') {
+            array_pop($subQuery);
+        }
+        
+        if (empty($subQuery)) return;
+        
+        $content = implode("\n", $subQuery);
+        
+        // Detectar stored procedures y tratarlos como un solo bloque
+        if (preg_match('/CREATE\s+(PROCEDURE|FUNCTION)/i', $content)) {
+            // Todo el contenido como un solo statement
+            call_user_func_array(array($this, 'add' . ucfirst(strtolower($section)) . 'Sql'), array($content));
+        } else {
+            // Para queries normales, dividir por líneas vacías dobles
+            $statements = preg_split('/\n\s*\n/', $content);
+            foreach ($statements as $statement) {
+                $statement = trim($statement);
+                if ($statement) {
+                    call_user_func_array(array($this, 'add' . ucfirst(strtolower($section)) . 'Sql'), array($statement));
+                }
+            }
+        }
     }
 
     public function addUpSql($sql)
